@@ -3,7 +3,9 @@ import torch
 import numpy as np
 from loguru import logger
 from gpt.config import Config
-from typing import Literal, Tuple
+from typing import Literal, Tuple, List
+
+ALL_SPLITS: List[Literal['train', 'val']] = ['train', 'val']
 
 class OpenWebTextDataset:
     def __init__(self, cfg: Config):
@@ -55,14 +57,18 @@ class OpenWebTextDataset:
 
     def sync_rng_state(self, current_step: int):
         # initial evaluation
-        for _ in range(self._cfg.log.eval_steps):
-            _, _ = self._get_data_and_indices('val')
+        for split in ALL_SPLITS:
+            for _ in range(self._cfg.log.eval_steps):
+                _, _ = self._get_data_and_indices(split)
 
         # start training
         n_loop = round(current_step / self._cfg.log.eval_interval)
         for i in range(n_loop):
             for _ in range(self._cfg.log.eval_interval):
                 _, _ = self._get_data_and_indices('train')
+
+            # skip the last evaluation as it will be done at the start of the training
             if i < n_loop - 1:
-                for _ in range(self._cfg.log.eval_steps):
-                    _, _ = self._get_data_and_indices('val')
+                for split in ALL_SPLITS:
+                    for _ in range(self._cfg.log.eval_steps):
+                        _, _ = self._get_data_and_indices(split)

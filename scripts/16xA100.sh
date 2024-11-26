@@ -2,7 +2,7 @@
 #SBATCH -J GPT2-Pretrain
 #SBATCH --nodes=4
 #SBATCH --gpus-per-node=A100:4
-#SBATCH -t 0:30:00
+#SBATCH -t 40:00:00
 #SBATCH --switches=1
 #SBATCH -o log/%A/log.out
 #SBATCH -e log/%A/err.out

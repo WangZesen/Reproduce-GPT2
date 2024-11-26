@@ -85,7 +85,7 @@ class Train(BaseModel):
     @computed_field
     @cached_property
     def global_tokens_per_step(self) -> int:
-        return (self.global_batch_size // self.network.world_size) * self.context_length
+        return (self.global_batch_size // self.network.world_size) * self.network.world_size * self.context_length
 
 
 class Model(BaseModel):
@@ -99,17 +99,15 @@ class Model(BaseModel):
 
 class Config(BaseModel):
     log_dir: str = './log'
-    log: Logging = Field(default_factory=Logging)
-    train: Train = Field(default_factory=Train)
-    model: Model = Field(default_factory=Model)
+    log: Logging = Field(default_factory=Logging, description="Logging configuration")
+    train: Train = Field(default_factory=Train, description="Training configuration")
+    model: Model = Field(default_factory=Model, description="Model configuration")
     dataset: SUPPORTED_DATASETS = 'openwebtext'
     data_dir: str = './data/openwebtext'
     in_memory: bool = True
-    checkpoint: Optional[str] = None
+    checkpoint: str = Field(default="", description="Path to a checkpoint to load. If empty, train from scratch.")
 
     @computed_field
     @cached_property
     def run_dir(self) -> str:
         return os.path.join(self.log_dir, self.log.run_name)
-
-

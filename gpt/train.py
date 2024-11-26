@@ -5,17 +5,18 @@ assert len(os.environ['CUDA_VISIBLE_DEVICES'].split(',')) >= local_world_size, \
     'CUDA_VISIBLE_DEVICES must have enough devices for LOCAL_WORLD_SIZE'
 os.environ['CUDA_VISIBLE_DEVICES'] = os.environ['CUDA_VISIBLE_DEVICES'].split(',')[local_rank]
 
-
 import sys
 import wandb
 import tomllib
 import argparse
 import time
 import tomli_w
+import subprocess
+from typing import Literal
 from loguru import logger
 from gpt.config import Config
 from gpt.model import GPTConfig, GPT
-from gpt.data import OpenWebTextDataset
+from gpt.data import OpenWebTextDataset, ALL_SPLITS
 from collections import deque
 import torch
 import torch.distributed as dist
@@ -115,20 +116,19 @@ def train_steps(model: torch.nn.Module,
                 dataset: OpenWebTextDataset,
                 scaler: torch.GradScaler,
                 start_step: int,
-                cfg: Config):
+                cfg: Config) -> float:
+    # synchronize for accurate timing
     torch.cuda.synchronize()
     dist.barrier()
 
     start_time = time.time_ns()
 
-    losses = deque(maxlen=cfg.log.log_interval)
     model.train()
-    for step in range(start_step, start_step + cfg.log.eval_interval):
-        optimizer.zero_grad()
+    for _ in range(start_step, start_step + cfg.log.eval_interval):
         with torch.autocast(enabled=cfg.train.amp, device_type='cuda'):
             x, y = dataset.get_batch()
             _, loss = model(x, y)
-        
+        optimizer.zero_grad()
         scaler.scale(loss).backward()
         if cfg.train.grad_norm_clip > 0:
             scaler.unscale_(optimizer)
@@ -136,34 +136,29 @@ def train_steps(model: torch.nn.Module,
         scaler.step(optimizer)
         scaler.update()
         scheduler.step()
-        losses.append(loss.item())
-
-        if (step + 1) % cfg.log.log_interval == 0:
-            if cfg.train.network.rank == 0:
-                logger.info(f'Step {step + 1:>6d}, lr: {scheduler.get_last_lr()[0]:.8f}, loss: {sum(losses) / len(losses):.8f}')
-                if cfg.log.wandb_log:
-                    wandb.log(data={'loss': sum(losses) / len(losses), 'lr': scheduler.get_last_lr()[0]},
-                              step=step + 1)
 
     torch.cuda.synchronize()
     return (time.time_ns() - start_time) / 1e6
 
 
 @torch.no_grad()
-def evaluate_steps(model: torch.nn.Module,
-                   dataset: OpenWebTextDataset,
-                   cfg: Config):
-    losses = []
+def evaluate_losses(model: torch.nn.Module,
+                    dataset: OpenWebTextDataset,
+                    cfg: Config) -> dict[Literal['train', 'val'], float]:
     model.eval()
-    for _ in range(cfg.log.eval_steps):
-        x, y = dataset.get_batch('val')
-        _, loss = model(x, y)
-        losses.append(loss)
-    avg_loss = torch.stack(losses).mean()
-    if dist.is_initialized():
-        dist.all_reduce(avg_loss, op=dist.ReduceOp.SUM)
-        avg_loss.div_(cfg.train.network.world_size)
-    return avg_loss.item()
+    losses = {}
+    for split in ALL_SPLITS:
+        _losses = []
+        for _ in range(cfg.log.eval_steps):
+            x, y = dataset.get_batch(split)
+            _, loss = model(x, y)
+            _losses.append(loss)
+        avg_loss = torch.stack(_losses).mean()
+        if dist.is_initialized():
+            dist.all_reduce(avg_loss, op=dist.ReduceOp.SUM)
+            avg_loss.div_(cfg.train.network.world_size)
+        losses[split] = avg_loss.item()
+    return losses
 
 
 if __name__ == '__main__':
@@ -189,7 +184,7 @@ if __name__ == '__main__':
     best_val_loss = float('inf')
     last_save_step = 0
 
-    if cfg.checkpoint is not None:
+    if cfg.checkpoint:
         checkpoint = torch.load(cfg.checkpoint)
         raw_model.load_state_dict(checkpoint['model'])
         optimizer.load_state_dict(checkpoint['optimizer'])
@@ -208,7 +203,7 @@ if __name__ == '__main__':
         model = torch.compile(raw_model)
     else:
         model = raw_model
-    
+
     if cfg.log.wandb_log and (cfg.train.network.rank == 0):
         wandb.init(project=cfg.log.wandb_project,
                    config=cfg.model_dump(),
@@ -216,39 +211,49 @@ if __name__ == '__main__':
                    dir=os.environ.get('TMPDIR', '/tmp/'))
 
     # evaluate initial model
-    val_loss = evaluate_steps(model, dataset, cfg) # type: ignore
+    losses = evaluate_losses(model, dataset, cfg) # type: ignore
     if cfg.train.network.rank == 0:
-        logger.info(f'Initial val loss: {val_loss:.6f}')
+        logger.info(f'Initial train loss: {losses["train"]:.6f}, val loss: {losses["val"]:.6f}, step: {current_step}')
         if cfg.log.wandb_log:
-            wandb.log(data={'val_loss': val_loss}, step=current_step, commit=True)
+            wandb.log(data={'val_loss': losses["val"],
+                            'train_loss': losses["train"],
+                            'total_train_time': total_train_time,
+                            'lr': scheduler.get_last_lr()[0]},
+                      step=current_step,
+                      commit=True)
 
     # start training
-
     for _ in range(cfg.train.n_steps // cfg.log.eval_interval):
         train_time_ms = train_steps(model, optimizer, scheduler, dataset, scaler, current_step, cfg) # type: ignore
         current_step += cfg.log.eval_interval
         total_train_time += train_time_ms / 1000
-        val_loss = evaluate_steps(model, dataset, cfg) # type: ignore
+        losses = evaluate_losses(model, dataset, cfg) # type: ignore
         if cfg.log.wandb_log and (cfg.train.network.rank == 0):
-            wandb.log(data={'val_loss': val_loss,
+            wandb.log(data={'val_loss': losses["val"],
+                            'train_loss': losses["train"],
                             'train_time': train_time_ms / 1000,
                             'time_ms_per_step': train_time_ms / cfg.log.eval_interval,
-                            'total_train_time': total_train_time},
+                            'total_train_time': total_train_time,
+                            'lr': scheduler.get_last_lr()[0]},
                       step=current_step,
                       commit=True)
         if cfg.train.network.rank == 0:
-            logger.info(f'Step {current_step:>6d}, Val loss: {val_loss:.6f}, Train time: {train_time_ms / 1000:.3f} s' \
-                        + f' ({train_time_ms / cfg.log.eval_interval:.3f} ms/step), Total train time: {total_train_time:.3f} s')
-            if val_loss < best_val_loss:
+            logger.info(f'Step {current_step:>6d}, Val loss: {losses["val"]:.6f}, Train loss: {losses["train"]:.6f}, ' \
+                        + f'Train time: {train_time_ms / 1000:.3f} s ' \
+                        + f'({train_time_ms / cfg.log.eval_interval:.3f} ms/step), Total train time: {total_train_time:.3f} s')
+            torch.save({'model': raw_model.state_dict(),
+                        'optimizer': optimizer.state_dict(),
+                        'scheduler': scheduler.state_dict(),
+                        'step': current_step,
+                        'total_train_time': total_train_time,
+                        'best_val_loss': best_val_loss}, os.path.join(cfg.run_dir, 'checkpoint.pth'))
+            if losses["val"] < best_val_loss:
                 last_save_step = current_step
-                best_val_loss = val_loss
+                best_val_loss = losses["val"]
                 logger.info(f'New best model found. Saving...')
-                torch.save({'model': raw_model.state_dict(),
-                            'optimizer': optimizer.state_dict(),
-                            'scheduler': scheduler.state_dict(),
-                            'step': current_step,
-                            'total_train_time': total_train_time,
-                            'best_val_loss': best_val_loss}, os.path.join(cfg.run_dir, 'best_model.pth'))
+                if os.path.exists(os.path.join(cfg.run_dir, 'best_model.pth')):
+                    os.remove(os.path.join(cfg.run_dir, 'best_model.pth'))
+                subprocess.check_call(['cp', os.path.join(cfg.run_dir, 'checkpoint.pth'), os.path.join(cfg.run_dir, 'best_model.pth')])
                 logger.info(f'Saved model to {os.path.join(cfg.run_dir, "best_model.pth")}')
 
     dist.destroy_process_group()
