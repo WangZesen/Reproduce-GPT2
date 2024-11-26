@@ -1,0 +1,7 @@
+out_dir = './log'
+
+[train]
+global_batch_size = 480
+
+[log]
+wandb_log = true
