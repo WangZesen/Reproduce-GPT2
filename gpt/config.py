@@ -10,7 +10,6 @@ SUPPORTED_OPTIMIZERS = Literal['adamw']
 
 
 class Logging(BaseModel):
-    log_interval: int = 100
     wandb_log: bool = True
     wandb_project: str = 'gpt2-owt'
     eval_interval: int = 1000

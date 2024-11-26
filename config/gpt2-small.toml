@@ -4,7 +4,6 @@ data_dir = "./data/openwebtext"
 in_memory = true
 
 [log]
-log_interval = 250
 wandb_log = true
 wandb_project = "gpt2-owt"
 eval_interval = 1000
