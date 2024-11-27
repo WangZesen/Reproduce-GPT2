@@ -1,7 +1,7 @@
 import os
 import datetime
 import subprocess
-from typing import Literal, Optional
+from typing import Literal, Union
 from pydantic import BaseModel, Field, computed_field
 from functools import cached_property
 
@@ -35,6 +35,14 @@ class AdamWConfig(BaseModel):
     weight_decay: float = 1e-1
 
 
+class AccumAdamWConfig(BaseModel):
+    name: Literal['accumadamw'] = 'accumadamw'
+    betas: tuple[float, float] = (0.9, 0.98)
+    eps: float = 1e-8
+    weight_decay: float = 1e-1
+    accum_steps: int = 8
+
+
 class Network(BaseModel):
     @computed_field
     @cached_property
@@ -64,13 +72,15 @@ class Network(BaseModel):
 
 
 class Train(BaseModel):
+    backend: Literal['pytorchddp', 'decentdp'] = 'pytorchddp'
+    topology: Literal['complete', 'alternating-exp-ring', 'exp'] = 'alternating-exp-ring'
     seed: int = 42
     global_batch_size: int = 480
     context_length: int = 1024
     n_steps: int = 600_000
     grad_norm_clip: float = 1.0
-    optim: AdamWConfig = Field(default_factory=AdamWConfig,
-                               discriminator='name')
+    optim: Union[AdamWConfig, AccumAdamWConfig] = Field(default_factory=AdamWConfig,
+                                                        discriminator='name')
     lr_schedule: CosineLRSchedule = Field(default_factory=CosineLRSchedule)
     network: Network = Field(default_factory=Network)
     compile: bool = True

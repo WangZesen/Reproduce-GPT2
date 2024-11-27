@@ -29,9 +29,9 @@ class OpenWebTextDataset:
 
 
     def _load_to_memory(self):
-        data = np.memmap(os.path.join(self._cfg.data_dir, 'train.bin'), dtype=np.uint16, mode='r')
+        data = np.fromfile(os.path.join(self._cfg.data_dir, 'train.bin'), dtype=np.uint16)
         self._train_data = np.array(data)
-        data = np.memmap(os.path.join(self._cfg.data_dir, 'val.bin'), dtype=np.uint16, mode='r')
+        data = np.fromfile(os.path.join(self._cfg.data_dir, 'val.bin'), dtype=np.uint16)
         self._val_data = np.array(data)
 
 
