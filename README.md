@@ -28,7 +28,7 @@ After activating the environment, run
 python data/openwebtext/prepare.py
 ```
 
-The whole process takes roughly 10 minutes for a 16-core CPU. The tokenized and binarinized data will be at `data/openwebtext/train.bin` (~17GB) and `data/openwebtext/val.bin` (~9MB).
+The whole process takes roughly 10 minutes for a 16-core CPU. The tokenized and binarinized data will be at `data/openwebtext/train.bin` (around 17GB) and `data/openwebtext/val.bin` (around 9MB).
 
 
 ### Launch Training via [SLURM](https://slurm.schedmd.com/documentation.html)
