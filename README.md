@@ -90,7 +90,9 @@ eval_steps = 200
 backend = 'decentdp'
 # topology for decentralized training which could be 'complete', 'exp', 'ring', or 'alternating-exp-ring'
 topology = 'alternating-exp-ring'
-# random seed for reproducibility
+# random seed for reproducibility.
+# the seed only controls the initialization of the models and the order of training/validation data.
+# however, since tensor cores are activated for efficiency, there might be slight differences in the figures for a repeated run.
 seed = 42
 # global batch size (sum of local batch sizes)
 # a local batch size with 30 will take ~25GB GPU memory
