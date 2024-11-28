@@ -19,7 +19,6 @@ n_steps = 600000
 grad_norm_clip = 1.0
 compile = true
 amp = true
-local_batch_size = 30
 
 [train.optim]
 name = "accumadamw"
