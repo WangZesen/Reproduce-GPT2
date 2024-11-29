@@ -151,9 +151,10 @@ def evaluate_losses(model: torch.nn.Module,
         _losses = []
         for _ in range(cfg.log.eval_steps):
             x, y = dataset.get_batch(split)
-            _, loss = model(x, y)
-            _losses.append(loss)
-        avg_loss = torch.stack(_losses).mean()
+            with torch.autocast(enabled=cfg.train.amp, device_type='cuda'):
+                _, loss = model(x, y)
+                _losses.append(loss.item())
+        avg_loss = torch.FloatTensor(_losses).mean().cuda()
         if dist.is_initialized():
             dist.all_reduce(avg_loss, op=dist.ReduceOp.SUM)
             avg_loss.div_(cfg.train.network.world_size)
